@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ENA Audio Call</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
+    body {
+      background: radial-gradient(circle at top, #0f1724, #000);
+      color: #fff;
+      font-family: 'Poppins', sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .app-container { text-align: center; }
+    .logo {
+      width: 90px;
+      margin-bottom: 15px;
+      filter: drop-shadow(0 0 10px #00b0ff);
+    }
+    .card {
+      background: rgba(255,255,255,0.08);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 30px;
+      width: 340px;
+      box-shadow: 0 0 20px rgba(0,176,255,0.3);
+    }
+    input {
+      width: 90%;
+      padding: 10px;
+      margin: 8px 0;
+      border: none;
+      border-radius: 10px;
+      text-align: center;
+      outline: none;
+    }
+    button {
+      background: #00b0ff;
+      border: none;
+      padding: 10px 20px;
+      color: #fff;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-top: 10px;
+      font-weight: 600;
+      transition: 0.3s;
+    }
+    button:hover { background: #0084cc; }
+    .green { background: #00cc88; }
+    .green:hover { background: #009966; }
+    .red { background: #ff4444; }
+    .red:hover { background: #cc0000; }
+    .hidden { display: none; }
+    .btn-group {
+      display: flex;
+      justify-content: space-around;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <img src="ena-logo.png" class="logo" alt="ENA Logo">
+    <div class="card">
+      <h2>🎧 ENA Audio Call</h2>
+
+      <!-- Step 1: Login -->
+      <div id="loginArea">
+        <input type="text" id="nameIn" placeholder="Enter your name">
+        <input type="text" id="numIn" placeholder="Enter your number">
+        <button id="saveBtn">Join</button>
+      </div>
+
+      <!-- Step 2: Dashboard -->
+      <div id="mainArea" class="hidden">
+        <p><b>Your ID:</b></p>
+        <div id="myId"></div>
+        <p>Name: <span id="myName"></span></p>
+        <p>Number: <span id="myNumber"></span></p>
+
+        <h3>Call Someone</h3>
+        <input type="text" id="targetId" placeholder="Enter user ID">
+        <button id="callBtn">Call</button>
+        <button id="hangBtn" class="red" disabled>Hang Up</button>
+
+        <!-- 🔇 Mute / Speaker Controls (hidden by default) -->
+        <div class="btn-group hidden" id="controls">
+          <button id="muteBtn" class="green">Mute</button>
+          <button id="speakerBtn" class="green">Speaker On</button>
+        </div>
+
+        <div id="incomingArea" style="margin-top:15px;">No incoming calls.</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+const socket = io();
+const loginArea = document.getElementById('loginArea');
+const mainArea = document.getElementById('mainArea');
+const saveBtn = document.getElementById('saveBtn');
+const nameIn = document.getElementById('nameIn');
+const numIn = document.getElementById('numIn');
+const myIdEl = document.getElementById('myId');
+const myNameEl = document.getElementById('myName');
+const myNumEl = document.getElementById('myNumber');
+const targetIdIn = document.getElementById('targetId');
+const callBtn = document.getElementById('callBtn');
+const hangBtn = document.getElementById('hangBtn');
+const incomingArea = document.getElementById('incomingArea');
+const controls = document.getElementById('controls');
+const muteBtn = document.getElementById('muteBtn');
+const speakerBtn = document.getElementById('speakerBtn');
+
+let localInfo = null, localStream = null, pc = null, remoteAudio = null;
+const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+// ringtone
+const ringAudio = new Audio('ring.mp3');
+function playRing(){ try{ ringAudio.loop = true; ringAudio.play(); } catch(e){} }
+function stopRing(){ try{ ringAudio.pause(); ringAudio.currentTime = 0; } catch(e){} }
+
+function cleanup(){
+  if(pc){ pc.close(); pc = null; }
+  if(localStream){ localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  stopRing();
+  hangBtn.disabled = true;
+  callBtn.disabled = false;
+  controls.classList.add('hidden'); // hide controls again
+  incomingArea.innerText = 'No incoming calls.';
+  if(remoteAudio){ remoteAudio.remove(); remoteAudio = null; }
+}
+
+// generate random user ID
+function makeId(len = 8){
+  const c = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let s = 'user';
+  for(let i = 0; i < len; i++) s += c[Math.floor(Math.random() * c.length)];
+  return s;
+}
+
+// --- LocalStorage: save/load user ---
+const storageKey = 'ena_audio_user';
+localInfo = JSON.parse(localStorage.getItem(storageKey) || 'null');
+
+if(localInfo){
+  // existing user
+  myIdEl.textContent = localInfo.userId;
+  myNameEl.textContent = localInfo.name;
+  myNumEl.textContent = localInfo.num;
+  loginArea.classList.add('hidden');
+  mainArea.classList.remove('hidden');
+  socket.emit('register', localInfo.userId);
+} else {
+  // first time user
+  saveBtn.onclick = ()=>{
+    const name = nameIn.value.trim() || 'User';
+    const num = numIn.value.trim() || '';
+    const userId = makeId();
+    localInfo = { userId, name, num };
+    localStorage.setItem(storageKey, JSON.stringify(localInfo));
+    myIdEl.textContent = userId;
+    myNameEl.textContent = name;
+    myNumEl.textContent = num;
+    loginArea.classList.add('hidden');
+    mainArea.classList.remove('hidden');
+    socket.emit('register', userId);
+  };
+}
+
+async function startAudio(){
+  localStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+  });
+}
+
+callBtn.onclick = async ()=>{
+  const target = targetIdIn.value.trim();
+  if(!target) return alert('Enter target ID!');
+  await startAudio();
+  pc = new RTCPeerConnection(config);
+  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  pc.ontrack = e => {
+    remoteAudio = document.createElement('audio');
+    remoteAudio.srcObject = e.streams[0];
+    remoteAudio.autoplay = true;
+    document.body.appendChild(remoteAudio);
+  };
+  pc.onicecandidate = e=>{
+    if(e.candidate) socket.emit('send-candidate',{toUserId: target, fromUserId: localInfo.userId, candidate: e.candidate});
+  };
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit('call-user',{toUserId: target, fromUserId: localInfo.userId, offer});
+  incomingArea.innerText = 'Calling ' + target + ' ...';
+  hangBtn.disabled = false;
+  callBtn.disabled = true;
+};
+
+hangBtn.onclick = ()=> cleanup();
+
+socket.on('incoming-call', async d=>{
+  playRing();
+  incomingArea.innerHTML = `📞 Call from <b>${d.fromUserId}</b><br><button id='accept'>Accept</button> <button id='reject'>Reject</button>`;
+  document.getElementById('accept').onclick = async ()=>{
+    stopRing();
+    await startAudio();
+    pc = new RTCPeerConnection(config);
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    pc.ontrack = e=>{
+      remoteAudio = document.createElement('audio');
+      remoteAudio.srcObject = e.streams[0];
+      remoteAudio.autoplay = true;
+      document.body.appendChild(remoteAudio);
+    };
+    pc.onicecandidate = e=>{
+      if(e.candidate) socket.emit('send-candidate',{toUserId:d.fromUserId, fromUserId:localInfo.userId, candidate:e.candidate});
+    };
+    await pc.setRemoteDescription(new RTCSessionDescription(d.offer));
+    const ans = await pc.createAnswer(); 
+    await pc.setLocalDescription(ans);
+    socket.emit('answer-call',{toUserId:d.fromUserId, fromUserId:localInfo.userId, answer: ans});
+    incomingArea.innerText = 'Connected with ' + d.fromUserId;
+    hangBtn.disabled = false;
+    callBtn.disabled = true;
+    controls.classList.remove('hidden'); // show mute/speaker only after connect
+  };
+  document.getElementById('reject').onclick = ()=>{ stopRing(); incomingArea.innerText='Call rejected.'; };
+});
+
+socket.on('call-answered', async d=>{
+  stopRing();
+  await pc.setRemoteDescription(new RTCSessionDescription(d.answer));
+  incomingArea.innerText = 'Connected with ' + d.fromUserId;
+  controls.classList.remove('hidden'); // show after connect
+});
+
+socket.on('candidate', async d=>{
+  if(pc) await pc.addIceCandidate(new RTCIceCandidate(d.candidate));
+});
+
+socket.on('user-offline', d=>{ alert('User offline: '+d.toUserId); cleanup(); });
+socket.on('disconnect', ()=>cleanup());
+
+// --- Mute / Unmute ---
+muteBtn.onclick = ()=>{
+  if(!localStream) return;
+  const track = localStream.getAudioTracks()[0];
+  track.enabled = !track.enabled;
+  muteBtn.textContent = track.enabled ? "Mute" : "Unmute";
+  muteBtn.classList.toggle('red');
+};
+
+// --- Speaker On / Off ---
+speakerBtn.onclick = ()=>{
+  if(remoteAudio){
+    remoteAudio.muted = !remoteAudio.muted;
+    speakerBtn.textContent = remoteAudio.muted ? "Speaker Off" : "Speaker On";
+    speakerBtn.classList.toggle('red');
+  }
+};
+
+  </script>
+</body>
+</html>
