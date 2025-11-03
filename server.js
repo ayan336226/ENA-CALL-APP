@@ -12,6 +12,11 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, "public")));
 
+// 👉 Added route to serve index.html for root URL
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 // map userId -> socketId
 const userSocketMap = new Map();
 
@@ -79,4 +84,3 @@ const HOST = '0.0.0.0';
 server.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
 });
-
